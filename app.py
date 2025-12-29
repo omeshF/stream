@@ -1,92 +1,102 @@
 import streamlit as st
 import requests
-from urllib.parse import quote
 
-# Configuration
-COUNTRY = "GB"
-YOUR_SERVICES = {
-    "Netflix": "nfx",
-    "Prime Video": "amp",
-    "Paramount+": "pmt",
-    "Channel 4": "ch4",
-    "Sky UK": "sky",
+# Securely load API key from Streamlit Cloud secrets
+# DO NOT hardcode the key in source code!
+try:
+    API_KEY = st.secrets["streaming_availability"]["api_key"]
+except KeyError:
+    st.error("❌ API key not found. Please configure it in Streamlit Cloud → Secrets.")
+    st.stop()
+
+BASE_URL = "https://streaming-availability.p.rapidapi.com/v2/search"
+HEADERS = {
+    "X-RapidAPI-Key": API_KEY,
+    "X-RapidAPI-Host": "streaming-availability.p.rapidapi.com"
 }
 
-# Reverse map for lookup
-ID_TO_SERVICE = {v: k for k, v in YOUR_SERVICES.items()}
+# Your UK services (lowercase, as returned by the API)
+YOUR_SERVICES = {
+    "netflix",
+    "prime",
+    "paramountplus",
+    "channel4",
+    "skygo",      # For Sky UK / Now TV
+    # "nowtv" may also appear — add if needed
+}
 
-def search_justwatch_public(query, country="GB"):
-    """Use JustWatch's public search endpoint with browser-like headers."""
-    encoded_query = quote(query)
-    url = f"https://www.justwatch.com/{country.lower()}/search?q={encoded_query}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-GB,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate",
-        "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
+SERVICE_NAMES = {
+    "netflix": "Netflix",
+    "prime": "Prime Video",
+    "paramountplus": "Paramount+",
+    "channel4": "Channel 4",
+    "skygo": "Sky UK",
+    "nowtv": "Now TV"
+}
+
+def search_title(query, country="GB"):
+    params = {
+        "query": query,
+        "country": country,
+        "output_language": "en",
+        "show_type": "all",
+        "series_granularity": "show",
+        "order_by": "relevance",
+        "page": 1
     }
-
     try:
-        # First, get the HTML page
-        response = requests.get(url, headers=headers)
+        response = requests.get(BASE_URL, headers=HEADERS, params=params)
         response.raise_for_status()
-
-        # JustWatch embeds JSON data in the page
-        # We'll extract it using string parsing (lightweight alternative to full JS render)
-        text = response.text
-        if 'id="preloadedData"' in text:
-            start = text.find('id="preloadedData">') + len('id="preloadedData">')
-            end = text.find('</script>', start)
-            json_str = text[start:end].strip()
-            if json_str.startswith("{") and json_str.endswith("}"):
-                import json
-                data = json.loads(json_str)
-                items = data.get("data", {}).get("searchTitles", {}).get("edges", [])
-                return [edge["node"] for edge in items]
+        data = response.json()
+        return data.get("result", [])
+    except requests.exceptions.HTTPError as e:
+        if response.status_code == 429:
+            st.error("⚠️ Too many requests. Free tier limit reached (100/day).")
+        else:
+            st.error(f"API error: {e}")
         return []
-
     except Exception as e:
-        st.error(f"⚠️ Search error: {str(e)[:100]}")
+        st.error(f"Unexpected error: {str(e)[:150]}")
         return []
 
 def get_available_on(item):
-    """Check which of your services are available."""
-    offers = item.get("offers", [])
+    streaming_info = item.get("streamingInfo", {}).get("gb", [])
     available = set()
-    for offer in offers:
-        pid = str(offer.get("provider_id"))
-        if pid in ID_TO_SERVICE:
-            available.add(ID_TO_SERVICE[pid])
+    for offer in streaming_info:
+        service_id = offer.get("service", "").lower()
+        if service_id in YOUR_SERVICES or service_id == "nowtv":
+            name = SERVICE_NAMES.get(service_id, service_id.upper())
+            available.add(name)
     return sorted(available)
 
-# App UI
-st.title("🎬 Where to Watch? (UK)")
-st.caption("Find where your shows/movies stream on Netflix, Prime, Paramount+, Channel 4, or Sky")
+# UI
+st.title("🎬 Where to Watch in the UK?")
+st.caption("Search movies & shows on Netflix, Prime, Paramount+, Channel 4, and Sky")
 
-query = st.text_input("Enter a movie or TV show title:", placeholder="e.g., Everybody Loves Raymond")
+query = st.text_input("Enter title:", placeholder="e.g., Ted Lasso")
 
 if query:
-    with st.spinner("Searching JustWatch..."):
-        results = search_justwatch_public(query, COUNTRY)
+    with st.spinner("Searching streaming availability..."):
+        results = search_title(query)
 
     if not results:
-        st.warning("No results found. Try a more specific title.")
+        st.warning("No results found. Try a different title.")
     else:
         for item in results[:5]:
-            title = item.get("title") or item.get("originalTitle", "Unknown")
-            poster = item.get("posterUrl")
-            if poster:
-                full_poster = f"https://images.justwatch.com{poster.replace('{{profile}}', 's332')}"
-                st.image(full_poster, width=100)
+            title = item.get("title", "Unknown")
+            year = item.get("year", "")
+            st.subheader(f"{title} ({year})" if year else title)
 
-            st.subheader(title)
-            item_type = "Movie" if item.get("objectType") == "MOVIE" else "TV Show"
-            st.caption(f"Type: {item_type}")
+            # Poster
+            poster_path = item.get("posterPath")
+            if poster_path:
+                st.image(f"https://image.tmdb.org/t/p/w300{poster_path}", width=120)
 
+            # Type
+            media_type = "Movie" if item.get("type") == "movie" else "TV Show"
+            st.caption(f"Type: {media_type}")
+
+            # Check your services
             available = get_available_on(item)
             if available:
                 st.success(f"✅ Available on: **{', '.join(available)}**")
