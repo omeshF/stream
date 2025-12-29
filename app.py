@@ -3,14 +3,16 @@ import requests
 from typing import List, Dict, Optional
 
 # ----------------------------
-# CONFIG (same as before)
+# CONFIGURATION
 # ----------------------------
 TMDB_KEY = st.secrets["tmdb"]["api_key"]
 COUNTRY = "GB"
 POSTER_BASE_URL = "https://image.tmdb.org/t/p/w300"
 
+# Block Indian regional languages (ISO 639-1 codes)
 BLOCKED_LANGUAGES = {"ta", "hi", "te", "ml", "bn", "pa", "mr", "gu", "kn"}
 
+# Provider mapping: TMDB name → display label + homepage
 PROVIDERS = {
     "Netflix": {"label": "Netflix", "homepage": "https://www.netflix.com"},
     "Amazon Prime Video": {"label": "Prime Video", "homepage": "https://www.primevideo.com"},
@@ -29,11 +31,8 @@ ALL_SERVICE_LABELS = sorted({v["label"] for v in PROVIDERS.values()})
 def is_allowed_language(item: Dict) -> bool:
     return item.get("original_language", "").lower() not in BLOCKED_LANGUAGES
 
-# [Keep get_titles_by_service and search_by_title functions identical to previous version]
-# (They are unchanged — omitted here for brevity but must be included)
-
 # ----------------------------
-# DATA FETCH FUNCTIONS (unchanged)
+# DATA FETCHING FUNCTIONS
 # ----------------------------
 @st.cache_data(ttl=3600)
 def get_titles_by_service(media_type: str, service_label: Optional[str] = None, genre_id: Optional[int] = None, limit: int = 12) -> List[Dict]:
@@ -144,20 +143,17 @@ def search_by_title(query: str) -> List[Dict]:
     return results
 
 # ----------------------------
-# SESSION STATE
+# SESSION STATE & HELPERS
 # ----------------------------
 if "search_query" not in st.session_state:
     st.session_state.search_query = ""
 if "selected_service" not in st.session_state:
     st.session_state.selected_service = None
 
-# ----------------------------
-# HOME BUTTON HANDLER
-# ----------------------------
 def go_home():
     st.session_state.search_query = ""
     st.session_state.selected_service = None
-    st.experimental_rerun()  # 🔁 Force full reset
+    st.rerun()  # ✅ Modern Streamlit rerun
 
 # ----------------------------
 # UI
@@ -166,29 +162,31 @@ st.set_page_config(page_title="🎬 Where to Watch UK", layout="wide")
 st.title("🎬 Where to Watch in the UK")
 st.caption("English content only • UK services")
 
-# Service buttons
+# Service filter buttons
 cols = st.columns(len(ALL_SERVICE_LABELS))
 for idx, service in enumerate(ALL_SERVICE_LABELS):
     with cols[idx]:
         if st.button(service, use_container_width=True, key=f"svc_{service}"):
             st.session_state.selected_service = service
             st.session_state.search_query = ""
-            st.experimental_rerun()
+            st.rerun()
 
 # Home button
 if st.button("🏠 Home", key="home_btn"):
     go_home()
 
-# Search bar — mic appears automatically on mobile Chrome/Safari (HTTPS)
+# Search bar
 query = st.text_input(
     "🔍 Search (English only):",
     value=st.session_state.search_query,
     placeholder="Type or tap mic (mobile) → e.g., Friends",
-    key="search_input"  # This key is required for state sync
+    key="search_input"
 )
 st.session_state.search_query = query
 
-# Render content
+# ----------------------------
+# RENDER CONTENT
+# ----------------------------
 if st.session_state.search_query:
     st.markdown("---")
     st.subheader(f"Results for: *{st.session_state.search_query}*")
@@ -223,10 +221,10 @@ elif st.session_state.selected_service:
                     st.image(item["poster"], use_container_width=True)
                     st.caption(f"[{item['title']} ({item['year']})]({item['url']})")
         else:
-            st.caption(f"No {section_name.lower()} on {service}.")
+            st.caption(f"No {section_name.lower()} found on {service}.")
 
 else:
-    # Homepage
+    # Homepage: all services
     for section_name, media_type, genre_id in [
         ("## 🎬 Top English Movies", "movie", None),
         ("## 📺 Top English TV Shows", "tv", None),
