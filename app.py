@@ -1,20 +1,19 @@
 import streamlit as st
 import requests
 
-# Load API key securely
+# Securely load API key
 try:
     API_KEY = st.secrets["streaming_availability"]["api_key"]
 except KeyError:
-    st.error("❌ Missing API key. Add it in Streamlit Cloud → Secrets as 'streaming_availability.api_key'.")
+    st.error("❌ API key missing. Add it in Streamlit Cloud → Secrets.")
     st.stop()
 
-BASE_URL = "https://streaming-availability.p.rapidapi.com/search/title"
+BASE_URL = "https://streaming-availability.p.rapidapi.com/search/basic"
 HEADERS = {
     "X-RapidAPI-Key": API_KEY,
     "X-RapidAPI-Host": "streaming-availability.p.rapidapi.com"
 }
 
-# Your UK services (use exact IDs from API response)
 YOUR_SERVICES = {"netflix", "prime", "paramountplus", "channel4", "skygo", "nowtv"}
 
 SERVICE_NAMES = {
@@ -26,33 +25,29 @@ SERVICE_NAMES = {
     "nowtv": "Now TV"
 }
 
-def search_title(query, country="GB"):
+def search_basic(query, country="GB"):
+    """
+    Use /search/basic for robust, fuzzy title matching.
+    """
     params = {
-        "title": query,
+        "query": query,          # free-text query (supports "friends", "friends 1994", etc.)
         "country": country,
-        "show_type": "all",
-        "output_language": "en"
+        "output_language": "en",
+        "show_type": "all"
     }
     try:
         response = requests.get(BASE_URL, headers=HEADERS, params=params)
-        # Note: This API returns 200 even with no results, but may return 404 on misconfig
-        if response.status_code == 404:
-            # Fallback: try with minimal params
-            response = requests.get(
-                BASE_URL,
-                headers=HEADERS,
-                params={"title": query, "country": country}
-            )
         response.raise_for_status()
         data = response.json()
         return data.get("result", [])
     except requests.exceptions.HTTPError as e:
-        if response.status_code == 429:
-            st.error("⚠️ Rate limit exceeded (100 requests/day on free tier).")
-        elif response.status_code == 403:
+        status = response.status_code
+        if status == 429:
+            st.error("⚠️ Free tier limit reached (100 requests/day).")
+        elif status == 403:
             st.error("❌ Invalid or missing API key.")
         else:
-            st.error(f"HTTP error {response.status_code}: {str(e)[:120]}")
+            st.error(f"API error ({status}): Search failed. Try again.")
         return []
     except Exception as e:
         st.error(f"Unexpected error: {str(e)[:120]}")
@@ -69,16 +64,16 @@ def get_available_on(item):
 
 # --- UI ---
 st.title("🎬 Where to Watch in the UK?")
-st.caption("Find your shows on Netflix, Prime, Paramount+, Channel 4, and Sky")
+st.caption("Search movies & shows on Netflix, Prime, Paramount+, Channel 4, and Sky")
 
-query = st.text_input("Enter a movie or TV show:", placeholder="e.g., Friends")
+query = st.text_input("Enter a title:", placeholder="e.g., Friends, The Bear, Dune")
 
 if query:
-    with st.spinner("Searching..."):
-        results = search_title(query)
+    with st.spinner(f"Searching for '{query}'..."):
+        results = search_basic(query)
 
     if not results:
-        st.warning("No results found. Try a more specific title (e.g., 'Friends 1994').")
+        st.warning("No matches found. Try a different spelling or title.")
     else:
         for item in results[:5]:
             title = item.get("title", "Unknown")
