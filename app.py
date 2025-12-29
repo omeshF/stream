@@ -1,96 +1,50 @@
 import streamlit as st
 import requests
 
-# Securely load API key
-try:
-    API_KEY = st.secrets["streaming_availability"]["api_key"]
-except KeyError:
-    st.error("❌ API key missing. Add it in Streamlit Cloud → Secrets.")
-    st.stop()
+TMDB_KEY = st.secrets["tmdb"]["api_key"]  # Add to Streamlit Secrets
 
-BASE_URL = "https://streaming-availability.p.rapidapi.com/search/basic"
-HEADERS = {
-    "X-RapidAPI-Key": API_KEY,
-    "X-RapidAPI-Host": "streaming-availability.p.rapidapi.com"
-}
+def find_where_to_watch(title, country="GB"):
+    # Step 1: Search title
+    search = requests.get(
+        "https://api.themoviedb.org/3/search/multi",
+        params={"api_key": TMDB_KEY, "query": title, "include_adult": False}
+    ).json()
+    
+    results = []
+    for item in search.get("results", [])[:3]:
+        media_type = "tv" if item.get("media_type") == "tv" else "movie"
+        media_id = item["id"]
+        
+        # Step 2: Get providers
+        providers = requests.get(
+            f"https://api.themoviedb.org/3/{media_type}/{media_id}/watch/providers",
+            params={"api_key": TMDB_KEY}
+        ).json()
+        
+        gb = providers.get("results", {}).get(country, {})
+        flatrate = [p["provider_name"] for p in gb.get("flatrate", [])]
+        free = [p["provider_name"] for p in gb.get("free", [])]
+        
+        results.append({
+            "title": item.get("title") or item.get("name"),
+            "year": (item.get("release_date") or item.get("first_air_date", ""))[:4],
+            "type": media_type,
+            "on": flatrate + free
+        })
+    return results
 
-YOUR_SERVICES = {"netflix", "prime", "paramountplus", "channel4", "skygo", "nowtv"}
+# Your UK services (as named by TMDB)
+MY_SERVICES = {"Netflix", "Amazon Prime Video", "Paramount Plus", "Channel 4", "Sky Go"}
 
-SERVICE_NAMES = {
-    "netflix": "Netflix",
-    "prime": "Prime Video",
-    "paramountplus": "Paramount+",
-    "channel4": "Channel 4",
-    "skygo": "Sky UK",
-    "nowtv": "Now TV"
-}
-
-def search_basic(query, country="GB"):
-    """
-    Use /search/basic for robust, fuzzy title matching.
-    """
-    params = {
-        "query": query,          # free-text query (supports "friends", "friends 1994", etc.)
-        "country": country,
-        "output_language": "en",
-        "show_type": "all"
-    }
-    try:
-        response = requests.get(BASE_URL, headers=HEADERS, params=params)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("result", [])
-    except requests.exceptions.HTTPError as e:
-        status = response.status_code
-        if status == 429:
-            st.error("⚠️ Free tier limit reached (100 requests/day).")
-        elif status == 403:
-            st.error("❌ Invalid or missing API key.")
-        else:
-            st.error(f"API error ({status}): Search failed. Try again.")
-        return []
-    except Exception as e:
-        st.error(f"Unexpected error: {str(e)[:120]}")
-        return []
-
-def get_available_on(item):
-    offers = item.get("streamingInfo", {}).get("gb", [])
-    available = set()
-    for offer in offers:
-        service = offer.get("service", "").lower()
-        if service in YOUR_SERVICES:
-            available.add(SERVICE_NAMES.get(service, service.upper()))
-    return sorted(available)
-
-# --- UI ---
 st.title("🎬 Where to Watch in the UK?")
-st.caption("Search movies & shows on Netflix, Prime, Paramount+, Channel 4, and Sky")
-
-query = st.text_input("Enter a title:", placeholder="e.g., Friends, The Bear, Dune")
+query = st.text_input("Enter title:", "Friends")
 
 if query:
-    with st.spinner(f"Searching for '{query}'..."):
-        results = search_basic(query)
-
-    if not results:
-        st.warning("No matches found. Try a different spelling or title.")
-    else:
-        for item in results[:5]:
-            title = item.get("title", "Unknown")
-            year = item.get("year", "")
-            st.subheader(f"{title} ({year})" if year else title)
-
-            poster = item.get("posterPath")
-            if poster:
-                st.image(f"https://image.tmdb.org/t/p/w300{poster}", width=110)
-
-            media_type = "Movie" if item.get("type") == "movie" else "TV Show"
-            st.caption(f"Type: {media_type}")
-
-            available = get_available_on(item)
-            if available:
-                st.success(f"✅ Available on: **{', '.join(available)}**")
-            else:
-                st.info("Not on your subscribed services.")
-
-            st.divider()
+    for show in find_where_to_watch(query):
+        available = [s for s in show["on"] if s in MY_SERVICES]
+        st.subheader(f"{show['title']} ({show['year']})")
+        if available:
+            st.success(f"✅ On: {', '.join(available)}")
+        else:
+            st.info("Not on your services")
+        st.divider()
